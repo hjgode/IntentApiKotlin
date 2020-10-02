@@ -1,6 +1,9 @@
 package com.test.intentapikotlin
 
-import android.content.*
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -8,11 +11,15 @@ import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import kotlin.experimental.and
 
 class MainActivity : AppCompatActivity() {
 
     private val TAG = "IntentApiSampleKotlin"
-    private val ACTION_BARCODE_DATA = "com.honeywell.sample.action.BARCODE_DATA"
+
+    private val IntentPackageName="com.intermec.datacollectionservice"
+
+    public val ACTION_BARCODE_DATA = "com.honeywell.sample.action.BARCODE_DATA"
     /**
      * Honeywell DataCollection Intent API
      * Claim scanner
@@ -62,15 +69,25 @@ class MainActivity : AppCompatActivity() {
     */
     private val EXTRA_SCAN = "com.honeywell.aidc.extra.EXTRA_SCAN"
 
+    companion object {
+        var ins: MainActivity? = null
+        fun getInstance(): MainActivity? {
+            return ins
+        }
+    }
+    var barcodeDataReceiver: myBarcodeReceiver? = null
+
+    @Volatile
+    private var receiversRegistered = false // see registerIntent function
+
     private var textView: TextView? = null
     var button: Button? = null
     var sdkVersion = 0
 
-
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        ins=this
 
         sdkVersion = Build.VERSION.SDK_INT
         Log.d(TAG, "sdkVersion=$sdkVersion\n")
@@ -90,34 +107,68 @@ class MainActivity : AppCompatActivity() {
             val handler = Handler()
             handler.postDelayed({
                 mysendBroadcast(
-                    Intent(EXTRA_CONTROL).putExtra(
+                    Intent(EXTRA_CONTROL)
+                        .putExtra(
                         EXTRA_SCAN,
                         false
-                    )
+                        )
+                        .setPackage(IntentPackageName)
                 )
             }, 3000)
         }
-        Log.d("IntentApiSample: ", "onCreate")
-
+        Log.d(TAG, "onCreate registerIntent")
+        registerIntent()
     }
 
+    fun registerIntent(){
+        /*
+        You may leave your receivers being registered to the same intents in AndroidManifest.xml file
+        (as this works for Android before v.7 ...), but note that in this case in logcat you will
+        still see "Background execution not allowed" with a reference to your receivers. This only
+        means that registration via the AndroidManifest.xml doesn't work (as expected for
+        Android 8+) but self-registered receivers should be called anyway!
+
+        For me: I need to have the receiver inside Manifest and using registerReceiver does not make difference
+
+         */
+        // Better use Manifest to register Receiver
+        if(! receiversRegistered) {
+            Log.d(TAG, "registerIntent()...")
+            if (barcodeDataReceiver == null) {
+                Log.d(TAG, "registerIntent() barcodeDataReceiver is null...")
+                var intentFilter: IntentFilter = IntentFilter()
+                intentFilter.addAction(ACTION_BARCODE_DATA)
+                intentFilter.addCategory("android.intent.category.DEFAULT")
+                registerReceiver(barcodeDataReceiver, intentFilter)
+            }
+            receiversRegistered=true;
+        }else{
+            Log.d(TAG, "registerIntent() already registered")
+        }
+    }
     override fun onResume() {
         super.onResume()
         //        IntentFilter intentFilter = new IntentFilter("hsm.RECVRBI");
-        registerReceiver(barcodeDataReceiver, IntentFilter(ACTION_BARCODE_DATA))
+        Log.d(TAG, "onResume registerIntent()")
+        registerIntent()
         claimScanner()
-        Log.d("IntentApiSample: ", "onResume")
     }
 
     override fun onPause() {
         super.onPause()
-        unregisterReceiver(barcodeDataReceiver)
         releaseScanner()
-        Log.d("IntentApiSample: ", "onPause")
+
+        Log.d(TAG, "onPause")
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        if(barcodeDataReceiver!=null) {
+            unregisterReceiver(barcodeDataReceiver)
+        }
+    }
     private fun claimScanner() {
-        Log.d("IntentApiSample: ", "claimScanner")
+        Log.d(TAG, "claimScanner")
         val properties = Bundle()
         properties.putBoolean("DPR_DATA_INTENT", true)
         properties.putString("DPR_DATA_INTENT_ACTION", ACTION_BARCODE_DATA)
@@ -128,6 +179,7 @@ class MainActivity : AppCompatActivity() {
         ) //This works for Hardware Trigger only! If scan is started from code, the code is responsible for a switching off the scanner before a decode
         mysendBroadcast(
             Intent(ACTION_CLAIM_SCANNER)
+                .setPackage(IntentPackageName)
                 .putExtra(EXTRA_SCANNER, "dcs.scanner.imager")
                 .putExtra(EXTRA_PROFILE, "DEFAULT") // "MyProfile1")
                 .putExtra(EXTRA_PROPERTIES, properties)
@@ -135,68 +187,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun releaseScanner() {
-        Log.d("IntentApiSample: ", "releaseScanner")
-        mysendBroadcast(Intent(ACTION_RELEASE_SCANNER))
-    }
-
-    private val barcodeDataReceiver: BroadcastReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            Log.d("IntentApiSample: ", "onReceive")
-            if (ACTION_BARCODE_DATA == intent.action) { /*
-These extras are available:
-"version" (int) = Data Intent Api version
-"aimId" (String) = The AIM Identifier
-"charset" (String) = The charset used to convert "dataBytes" to "data" string
-"codeId" (String) = The Honeywell Symbology Identifier
-"data" (String) = The barcode data as a string
-"dataBytes" (byte[]) = The barcode data as a byte array
-"timestamp" (String) = The barcode timestamp
-*/
-                val version = intent.getIntExtra("version", 0)
-                if (version >= 1) {
-                    val aimId = intent.getStringExtra("aimId")
-                    val charset = intent.getStringExtra("charset")
-                    val codeId = intent.getStringExtra("codeId")
-                    val data = intent.getStringExtra("data")
-                    val dataBytes = intent.getByteArrayExtra("dataBytes")
-                    var dataBytesStr: String? = ""
-                    if (dataBytes != null && dataBytes.size > 0) dataBytesStr =
-                        bytesToHexString(dataBytes)
-                    val timestamp = intent.getStringExtra("timestamp")
-                    val text = String.format(
-                        "Data:%s\n" +
-                                "Charset:%s\n" +
-                                "Bytes:%s\n" +
-                                "AimId:%s\n" +
-                                "CodeId:%s\n" +
-                                "Timestamp:%s\n",
-                        data, charset, dataBytesStr, aimId, codeId, timestamp
-                    )
-                    setText(text)
-                }
-            }
-        }
+        Log.d(TAG, "releaseScanner")
+        mysendBroadcast(Intent(ACTION_RELEASE_SCANNER).setPackage(IntentPackageName))
     }
 
     private fun sendImplicitBroadcast(ctxt: Context, i: Intent) {
         Log.d(TAG, "sendImplicitBroadcast")
+
+        if(i.getPackage()!=null){
+            Log.d(TAG, "broadcast as intent has package name")
+            //sendBroadcast(i);
+        }
+
         val pm = ctxt.packageManager
         val matches = pm.queryBroadcastReceivers(i, 0)
-        for (resolveInfo in matches) {
-            val explicit = Intent(i)
-            val cn = ComponentName(
-                resolveInfo.activityInfo.applicationInfo.packageName,
-                resolveInfo.activityInfo.name
-            )
-            explicit.component = cn
-            Log.d(TAG, "sendImplicitBroadcast: ctxt.sendBroadcast(explicit): " + ctxt.toString()+", "+explicit.toString())
-            ctxt.sendBroadcast(explicit)
+        if(matches.size>0) {
+            for (resolveInfo in matches) {
+                val explicit = Intent(i)
+                val cn = ComponentName(
+                    resolveInfo.activityInfo.applicationInfo.packageName,
+                    resolveInfo.activityInfo.name
+                )
+                explicit.component = cn
+                Log.d(
+                    TAG,
+                    "sendImplicitBroadcast: ctxt.sendBroadcast(implicit): " + ctxt.toString() + ", " + explicit.toString()
+                )
+                ctxt.sendBroadcast(explicit)
+            }
+        }else{
+            // to be compatible with Android 9 and later version for dynamic receiver
+            Log.d(TAG, "Android 9 needed sendBroadcast")
+            ctxt.sendBroadcast(i)
         }
     }
 
     private fun mysendBroadcast(intent: Intent) {
         Log.d(TAG, "mysendBroadcast")
-        if (sdkVersion < 26) {
+        sendImplicitBroadcast(applicationContext, intent)
+
+ /*       if (sdkVersion < 26) {
             Log.d(TAG, "mysendBroadcast: sendBroadcast")
             sendBroadcast(intent)
         } else { //for Android O above "gives W/BroadcastQueue: Background execution not allowed: receiving Intent"
@@ -204,22 +234,30 @@ These extras are available:
             Log.d(TAG, "mysendBroadcast: sendImplicitBroadcast")
             sendImplicitBroadcast(applicationContext, intent)
         }
+*/
     }
-    private fun setText(text: String) {
+
+    public fun setText(text: String) {
         if (textView != null) {
-            runOnUiThread { textView!!.text = text }
+            this@MainActivity.runOnUiThread {
+                textView!!.text = text
+            }
         }
     }
 
-    private fun bytesToHexString(arr: ByteArray?): String? {
-        var s = "[]"
-        if (arr != null) {
-            s = "["
-            for (i in arr.indices) {
-                s += "0x" + Integer.toHexString(arr[i].toInt()) + ", "
-            }
-            s = s.substring(0, s.length - 2) + "]"
+    private val HEX_ARRAY = "0123456789ABCDEF".toCharArray()
+    fun bytesToHex(bytes: ByteArray): String? {
+        val hexChars = CharArray(bytes.size * 2)
+        val sb = StringBuilder()
+        sb.append("{")
+        for (j in bytes.indices) {
+            val v: Int = (bytes[j] and 0xFF.toByte()).toInt()
+            hexChars[j * 2] = HEX_ARRAY[v ushr 4]
+            hexChars[j * 2 + 1] = HEX_ARRAY[v and 0x0F]
+            sb.append("0x" + HEX_ARRAY[v ushr 4])
+            sb.append(HEX_ARRAY[v and 0x0F].toString() + ", ")
         }
-        return s
+        sb.append("}")
+        return sb.toString()
     }
 }
